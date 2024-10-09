@@ -1,4 +1,3 @@
-use crate::errors::MatchError;
 use jiff::{civil, fmt::temporal};
 
 static DATE_PARSER: temporal::DateTimeParser = temporal::DateTimeParser::new();
@@ -10,22 +9,22 @@ pub enum SegType {
     Date,
 }
 impl SegType {
-    fn match_string(input: &str) -> Result<MatchValue, MatchError> {
-        Ok(MatchValue::from_str(input))
+    fn match_string(input: &str) -> Option<MatchValue> {
+        Some(MatchValue::from_str(input))
     }
-    fn match_number(input: &str) -> Result<MatchValue, MatchError> {
-        let num = input
+    fn match_number(input: &str) -> Option<MatchValue> {
+        input
             .parse::<f64>()
-            .map_err(|_| MatchError::MatchError("number".to_string(), input.to_string()))?;
-        Ok(MatchValue::from_number(num))
+            .ok()
+            .map(|v| MatchValue::from_number(v))
     }
-    fn match_date(input: &str) -> Result<MatchValue, MatchError> {
-        let parsed = DATE_PARSER
+    fn match_date(input: &str) -> Option<MatchValue> {
+        DATE_PARSER
             .parse_date(input)
-            .map_err(|_| MatchError::MatchError("date".to_string(), input.to_string()))?;
-        Ok(MatchValue::from_date(parsed))
+            .ok()
+            .map(|v| MatchValue::from_date(v))
     }
-    fn match_segment(&self, input: &str) -> Result<MatchValue, MatchError> {
+    fn match_segment(&self, input: &str) -> Option<MatchValue> {
         match self {
             SegType::String => Self::match_string(input),
             SegType::Number => Self::match_number(input),
@@ -53,54 +52,54 @@ pub enum Segment {
 }
 
 impl Segment {
-    pub fn match_segment(&self, input: &str) -> Result<MatchResult, MatchError> {
+    pub fn match_segment(&self, input: &str) -> MatchResult {
         match self {
             Segment::Static(s) => {
                 if input == s.as_str() {
-                    Ok(MatchResult::new_unnamed(MatchValue::from_str(input)))
+                    MatchResult::new_unnamed(MatchValue::from_str(input))
                 } else {
-                    Err(MatchError::MatchError(s.clone(), input.to_string()))
+                    MatchResult::NotMatched
                 }
             }
             Segment::Terminus => {
                 if input.is_empty() {
-                    Ok(MatchResult::terminus())
+                    MatchResult::terminus()
                 } else {
-                    Err(MatchError::MatchError(
-                        "<Terminus>".to_string(),
-                        input.to_string(),
-                    ))
+                    MatchResult::NotMatched
                 }
             }
             Segment::Var(v) => {
-                let parsed = v
-                    .seg_type
-                    .match_segment(input)
-                    .map_err(|e| e.with_name(v.name.clone()))?;
-                Ok(MatchResult::new_named(parsed, v.name.clone()))
+                if let Some(parsed) = v.seg_type.match_segment(input) {
+                    MatchResult::new_named(parsed, v.name.clone())
+                } else {
+                    MatchResult::NotMatched
+                }
             }
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MatchResult {
-    pub value: MatchValue,
-    pub name: Option<String>,
+pub enum MatchResult {
+    NotMatched,
+    Matched {
+        value: MatchValue,
+        name: Option<String>,
+    },
 }
 
 impl MatchResult {
     fn new_named(value: MatchValue, name: String) -> Self {
-        Self {
+        Self::Matched {
             value,
             name: Some(name),
         }
     }
     fn new_unnamed(value: MatchValue) -> Self {
-        Self { value, name: None }
+        Self::Matched { value, name: None }
     }
     fn terminus() -> Self {
-        Self {
+        Self::Matched {
             value: MatchValue::Terminus,
             name: None,
         }
@@ -133,86 +132,82 @@ mod test {
     use crate::errors::MatchError;
 
     #[test]
-    fn seg_type_match_string() -> Result<(), MatchError> {
-        let result = SegType::match_string("hello")?;
-        assert_eq!(result, MatchValue::String(String::from("hello")));
-        Ok(())
+    fn seg_type_match_string() {
+        let result = SegType::match_string("hello");
+        assert_eq!(result, Some(MatchValue::String(String::from("hello"))));
     }
     #[test]
-    fn seg_type_match_number_ok() -> Result<(), MatchError> {
-        let result = SegType::match_number("123.45")?;
-        assert_eq!(result, MatchValue::Number(123.45));
-        Ok(())
+    fn seg_type_match_number_ok() {
+        let result = SegType::match_number("123.45");
+        assert_eq!(result, Some(MatchValue::Number(123.45)));
     }
     #[test]
     fn seg_type_match_number_err() {
         let result = SegType::match_number("123.45.67");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
     #[test]
-    fn seg_type_match_date_ok() -> Result<(), MatchError> {
-        let result = SegType::match_date("2021-01-01")?;
-        assert_eq!(result, MatchValue::Date(civil::date(2021, 1, 1)));
-        Ok(())
+    fn seg_type_match_date_ok() {
+        let result = SegType::match_date("2021-01-01");
+        assert_eq!(result, Some(MatchValue::Date(civil::date(2021, 1, 1))));
     }
     #[test]
     fn seg_type_match_date_err() {
         let result = SegType::match_date("2021-01-01-01");
-        assert!(result.is_err());
+        assert!(result.is_none());
     }
     #[test]
-    fn segment_static_match_ok() -> Result<(), MatchError> {
+    fn segment_static_match_ok() {
         let segment = Segment::Static("hello".to_string());
-        let result = segment.match_segment("hello")?;
-        assert_eq!(result.value, MatchValue::String("hello".to_string()));
-        Ok(())
+        let result = segment.match_segment("hello");
+        assert_eq!(
+            result,
+            MatchResult::Matched {
+                value: MatchValue::String("hello".to_string()),
+                name: None
+            }
+        )
     }
     #[test]
-    fn segment_static_match_err() -> Result<(), MatchError> {
+    fn segment_static_match_err() {
         let segment = Segment::Static("hello".to_string());
-        if let Err(MatchError::MatchError(exp, got)) = segment.match_segment("world") {
-            assert_eq!(exp, "hello".to_string());
-            assert_eq!(got, "world".to_string());
-        } else {
-            panic!("Expected error");
-        }
-        Ok(())
+        let result = segment.match_segment("world");
+        assert_eq!(result, MatchResult::NotMatched);
     }
     #[test]
-    fn segment_terminus_match_ok() -> Result<(), MatchError> {
+    fn segment_terminus_match_ok() {
         let segment = Segment::Terminus;
-        let result = segment.match_segment("")?;
-        assert_eq!(result.value, MatchValue::Terminus);
-        Ok(())
+        let result = segment.match_segment("");
+        assert_eq!(
+            result,
+            MatchResult::Matched {
+                value: MatchValue::Terminus,
+                name: None
+            }
+        );
     }
     #[test]
-    fn segment_terminus_match_err() -> Result<(), MatchError> {
+    fn segment_terminus_match_err() {
         let segment = Segment::Terminus;
-        if let Err(MatchError::MatchError(exp, got)) = segment.match_segment("world") {
-            assert_eq!(exp, "<Terminus>".to_string());
-            assert_eq!(got, "world".to_string());
-        } else {
-            panic!("Expected error");
-        }
-        Ok(())
+        let result = segment.match_segment("world");
+        assert_eq!(result, MatchResult::NotMatched)
     }
     #[test]
-    fn segment_var_match_ok() -> Result<(), MatchError> {
+    fn segment_var_match_ok() {
         let segment = Segment::Var(Var::new("num".to_string(), SegType::Number));
-        let result = segment.match_segment("123.45")?;
-        assert_eq!(result.value, MatchValue::Number(123.45));
-        Ok(())
+        let result = segment.match_segment("123.45");
+        assert_eq!(
+            result,
+            MatchResult::Matched {
+                value: MatchValue::Number(123.45),
+                name: Some("num".to_string())
+            }
+        );
     }
     #[test]
-    fn segment_var_match_err() -> Result<(), MatchError> {
+    fn segment_var_match_err() {
         let segment = Segment::Var(Var::new("num".to_string(), SegType::Number));
-        if let Err(MatchError::NamedMatchError(name, exp, got)) = segment.match_segment("world") {
-            assert_eq!(name, "num".to_string());
-            assert_eq!(exp, "number".to_string());
-            assert_eq!(got, "world".to_string());
-        } else {
-            panic!("Expected error");
-        }
-        Ok(())
+        let result = segment.match_segment("world");
+        assert_eq!(result, MatchResult::NotMatched)
     }
 }
