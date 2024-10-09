@@ -1,0 +1,8 @@
+[package]
+name = "urlpather"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+jiff = "0.1.13"
+thiserror = "1.0.64"
